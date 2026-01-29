@@ -1,0 +1,15 @@
+bot:
+  token: "你的_TELEGRAM_BOT_TOKEN"
+  poller_timeout: 10s
+  log_level: "info" # debug, info, warn, error
+
+ai:
+  provider: "openai" # openai, gemini 等
+  base_url: "https://api.openai.com/v1"
+  api_key: "你的_API_KEY"
+  model: "gpt-4o"
+  default_prompt: "你是一个得力的助手。"
+
+# 允许免费使用机器人的用户 ID 列表
+allowed_users:
+  - 123456789
