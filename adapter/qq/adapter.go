@@ -2,6 +2,7 @@ package qq
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -89,6 +90,36 @@ func (a *QQAdapter) RegisterCommand(cmd string, handler core.Handler) {
 
 func (a *QQAdapter) RegisterText(handler core.Handler) {
 	a.textHandler = handler
+}
+
+func (a *QQAdapter) SendTo(recipient string, text string) error {
+    // Expected format: "Group:ID" or "User:ID" or just "ID" (defaults to ?)
+    // Let's require explicit prefix.
+    parts := strings.SplitN(recipient, ":", 2)
+    if len(parts) != 2 {
+        return fmt.Errorf("invalid qq recipient format, expected 'Group:ID' or 'User:ID', got: %s", recipient)
+    }
+    
+    targetType := strings.ToLower(parts[0])
+    targetID := parts[1]
+    
+    msgToPost := &dto.MessageToCreate{
+        Content: text,
+        MsgType: 0,
+        MsgSeq: 1, // Start seq
+    }
+    
+    var err error
+    switch targetType {
+    case "group":
+        _, err = a.api.PostGroupMessage(context.Background(), targetID, msgToPost)
+    case "user", "c2c":
+        _, err = a.api.PostC2CMessage(context.Background(), targetID, msgToPost)
+    default:
+        return fmt.Errorf("unknown qq target type: %s", targetType)
+    }
+    
+    return err
 }
 
 // --- Handlers ---

@@ -16,6 +16,9 @@ type Platform interface {
 	// Registration
 	RegisterCommand(cmd string, handler Handler)
 	RegisterText(handler Handler)
+    
+    // Actions
+    SendTo(recipient string, text string) error
 }
 
 // Handler is a function that handles a generic context
@@ -55,6 +58,9 @@ type PluginContext struct {
 	// Platforms allows plugins to register handlers on all platforms
 	RegisterCommand func(cmd string, h Handler)
 	RegisterText    func(h Handler)
+    
+    // SendTo allows plugins to send messages to specific targets (e.g. "Telegram:123")
+    SendTo func(recipient string, text string) error
 }
 
 type Plugin interface {

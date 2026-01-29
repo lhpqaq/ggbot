@@ -92,6 +92,22 @@ func main() {
 				p.RegisterText(h)
 			}
 		},
+        SendTo: func(recipient string, text string) error {
+            // Recipient format: "Platform:Target"
+            parts := strings.SplitN(recipient, ":", 2)
+            if len(parts) != 2 {
+                return nil // Or error "invalid format"
+            }
+            platformName := strings.ToLower(parts[0])
+            target := parts[1]
+            
+            for _, p := range platforms {
+                if strings.ToLower(p.Name()) == platformName {
+                    return p.SendTo(target, text)
+                }
+            }
+            return nil // Platform not found
+        },
 	}
 
 	allPlugins := []plugins.Plugin{

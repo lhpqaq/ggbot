@@ -61,6 +61,15 @@ func (a *TelegramAdapter) RegisterText(handler core.Handler) {
 	})
 }
 
+func (a *TelegramAdapter) SendTo(recipient string, text string) error {
+    id, err := strconv.ParseInt(recipient, 10, 64)
+    if err != nil {
+        return fmt.Errorf("invalid telegram recipient id: %s", recipient)
+    }
+    _, err = a.bot.Send(&tele.User{ID: id}, text)
+    return err
+}
+
 // We need a concrete context implementation
 type TeleContext struct {
 	ctx tele.Context
