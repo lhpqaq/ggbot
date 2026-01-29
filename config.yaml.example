@@ -16,9 +16,11 @@ ai:
 
 # MCP 服务器配置
 mcpServers:
-  mcp-hotnews-server:
-    type: "streamable_http"
-    url: "get_from_https://modelscope.cn/mcp/servers/@wopal-cn/mcp-hotnews-server"
+  hotnews:
+    type: "sse"
+    url: "https://dashscope.aliyuncs.com/api/v1/mcps/hotnews/sse"
+    headers:
+      Authorization: "Bearer ${DASHSCOPE_API_KEY}"  # 使用环境变量
 
 # 定时推送配置
 push:

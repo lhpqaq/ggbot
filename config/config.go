@@ -17,24 +17,25 @@ type Config struct {
 	// Platform specific lists
 	AllowedTelegram []string `yaml:"allowed_telegram"`
 	AllowedQQ       []string `yaml:"allowed_qq"`
-    
-    // MCP Configuration
-    MCPServers map[string]MCPConfig `yaml:"mcpServers"`
-    
-    // Push Configuration
-    Push PushConfig `yaml:"push"`
+
+	// MCP Configuration
+	MCPServers map[string]MCPConfig `yaml:"mcpServers"`
+
+	// Push Configuration
+	Push PushConfig `yaml:"push"`
 }
 
 type MCPConfig struct {
-    Type string `yaml:"type"` // e.g. "streamable_http"
-    URL  string `yaml:"url"`
+	Type    string            `yaml:"type"` // e.g. "streamable_http", "sse"
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"` // Custom headers for authentication
 }
 
 type PushConfig struct {
-    Enabled  bool     `yaml:"enabled"`
-    Time     string   `yaml:"time"`   // e.g. "08:00"
-    Targets  []string `yaml:"targets"` // e.g. ["Telegram:123", "QQ:Group:456"]
-    Prompt   string   `yaml:"prompt"`  // Prompt to generate content, e.g. "Get hot news"
+	Enabled bool     `yaml:"enabled"`
+	Time    string   `yaml:"time"`    // e.g. "08:00"
+	Targets []string `yaml:"targets"` // e.g. ["Telegram:123", "QQ:Group:456"]
+	Prompt  string   `yaml:"prompt"`  // Prompt to generate content, e.g. "Get hot news"
 }
 
 type BotConfig struct {
