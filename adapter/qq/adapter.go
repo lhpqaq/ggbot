@@ -2,7 +2,6 @@ package qq
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -230,7 +229,7 @@ func (c *QQContext) Reply(text string) error {
 }
 
 func (c *QQContext) Send(text string) (core.Message, error) {
-    slog.Info("QQ Sending Message", "type", c.ctxType, "id", c.msgID, "content", text)
+    slog.Info("QQ Sending Message", "type", c.ctxType, "id", c.msgID, "content", text, "seq", c.msgSeq+1)
     
     var msg *dto.Message
     var err error
@@ -240,9 +239,6 @@ func (c *QQContext) Send(text string) (core.Message, error) {
         Content: text,
         MsgID:   c.msgID,
         MsgType: 0, // Text
-        // MsgSeq needs to be handled? 
-        // For Group/C2C, msg_seq is used for deduplication. 
-        // SDK might handle it or we pass a simple increment.
         MsgSeq: uint32(c.msgSeq + 1), 
     }
 
@@ -268,6 +264,9 @@ func (c *QQContext) Send(text string) (core.Message, error) {
         return nil, err
     }
     
+    // Increment seq for next message in this context (e.g. edit/reply)
+    c.msgSeq++
+    
     // Return wrapper. If msg is nil (some APIs return nil on success?), handle it.
     if msg == nil {
         msg = &dto.Message{ID: "unknown"}
@@ -277,7 +276,10 @@ func (c *QQContext) Send(text string) (core.Message, error) {
 }
 
 func (c *QQContext) Edit(msg core.Message, text string) error {
-    return fmt.Errorf("edit not supported on QQ")
+    // QQ does not support editing messages.
+    // As per requirement: "Edit sends a new message"
+    _, err := c.Send(text)
+    return err
 }
 
 func (c *QQContext) Platform() string {
