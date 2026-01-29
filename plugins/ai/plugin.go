@@ -193,7 +193,7 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 
 		messages := []ChatMessage{
 			{Role: "system", Content: "你是一个专业的新闻播报员。请获取最新新闻并进行简洁清晰的总结，用中文回复。"},
-			{Role: "user", Content: "请搜索获取今日最新新闻并总结要点"},
+			{Role: "user", Content: "请搜索获取今日最新新闻并总结要点，列出具体的新闻事件"},
 		}
 
 		// 执行工具调用循环（最多5轮）
