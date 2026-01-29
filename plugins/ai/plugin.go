@@ -269,6 +269,124 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		return c.Edit(sentMsg, "新闻获取轮次过多，已停止。")
 	})
 
+	// Handler: /s - 搜索指令，使用 MCP 工具搜索
+	ctx.RegisterCommand("/s", func(c core.Context) error {
+		user := c.Sender()
+		if !cfg.IsAllowed(c.Platform(), user.ID) {
+			return nil
+		}
+
+		// 获取搜索关键词
+		text := c.Text()
+		parts := strings.SplitN(text, " ", 2)
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			return c.Reply("使用方法: /s 搜索内容\n例如: /s 今天天气怎么样")
+		}
+		query := strings.TrimSpace(parts[1])
+
+		storageKey := c.Platform() + ":" + user.ID
+		aiCfg := cfg.AI
+		if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
+			aiCfg = *userOverride
+		}
+
+		// 获取女朋友定制提示词
+		systemPrompt := `你是一个智能搜索助手。
+你必须先使用搜索工具来获取最新信息，然后根据搜索结果用简洁清晰的中文回答用户的问题。
+请注意：
+1. 首先调用搜索工具获取相关信息
+2. 获取到搜索结果后，对结果进行分析和总结
+3. 用简洁、有条理的中文回复用户
+4. 如果搜索结果不相关，请说明并尝试用其他关键词重新搜索`
+		if name, gfPrompt, ok := cfg.GetGirlfriendPrompt(storageKey); ok {
+			logger.Debug("Using girlfriend prompt for search", "name", name)
+			systemPrompt = gfPrompt + "\n\n你需要使用搜索工具获取最新信息来回答问题，获取到结果后用温暖的语气总结回复。"
+		}
+
+		sentMsg, err := c.Send("🔍 正在搜索...")
+		if err != nil {
+			return c.Reply("发送消息失败: " + err.Error())
+		}
+
+		messages := []ChatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: query},
+		}
+
+		// 执行工具调用循环（最多5轮）
+		for i := 0; i < 5; i++ {
+			logger.Debug("Search generation", "query", query, "iteration", i)
+
+			respMsg, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, p.tools)
+			if err != nil {
+				logger.Error("Search AI Generation Error", "error", err)
+				_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
+				return nil
+			}
+
+			messages = append(messages, *respMsg)
+
+			// 如果有工具调用，执行它们
+			if len(respMsg.ToolCalls) > 0 {
+				for _, call := range respMsg.ToolCalls {
+					session, ok := p.toolMap[call.Function.Name]
+					if !ok {
+						logger.Error("Tool not found", "name", call.Function.Name)
+						messages = append(messages, ChatMessage{
+							Role:       "tool",
+							ToolCallID: call.ID,
+							Content:    "Error: Tool not found",
+						})
+						continue
+					}
+
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+						messages = append(messages, ChatMessage{
+							Role:       "tool",
+							ToolCallID: call.ID,
+							Content:    fmt.Sprintf("Error parsing arguments: %v", err),
+						})
+						continue
+					}
+
+					logger.Info("Executing Tool for Search", "tool", call.Function.Name)
+
+					res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+						Name:      call.Function.Name,
+						Arguments: args,
+					})
+
+					var contentStr string
+					if err != nil {
+						contentStr = fmt.Sprintf("Error executing tool: %v", err)
+					} else {
+						for _, content := range res.Content {
+							if textContent, ok := content.(*mcp.TextContent); ok {
+								contentStr += textContent.Text
+							}
+						}
+					}
+					logger.Debug("Search tool result", "content_length", len(contentStr))
+					messages = append(messages, ChatMessage{
+						Role:       "tool",
+						ToolCallID: call.ID,
+						Content:    contentStr,
+					})
+				}
+			} else {
+				// 获得最终回复
+				if err := c.Edit(sentMsg, respMsg.Content); err != nil {
+					logger.Error("Failed to edit message", "error", err)
+					return c.Reply(respMsg.Content)
+				}
+				return nil
+			}
+		}
+
+		return c.Edit(sentMsg, "搜索轮次过多，已停止。")
+	})
+
 	// Handler: Text (AI Chat)
 	ctx.RegisterText(func(c core.Context) error {
 		if strings.HasPrefix(c.Text(), "/") {
