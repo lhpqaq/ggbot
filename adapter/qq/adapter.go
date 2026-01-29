@@ -53,11 +53,15 @@ func (a *QQAdapter) Name() string {
 func (a *QQAdapter) Start() error {
 	a.logger.Info("Starting QQ Bot...")
     
-	// Register Handlers
-    // event.RegisterHandlers returns Intent.
+	// Register Handlers for Guild, Group, and C2C
 	intent := event.RegisterHandlers(
-		a.GroupATMessageEventHandler(),
+        // Guild Handlers
+		a.GuildATMessageEventHandler(),
         a.DirectMessageEventHandler(),
+        // Group Handler
+        a.GroupATMessageEventHandler(),
+        // C2C Handler
+        a.C2CMessageEventHandler(),
 	)
     
     // Get WS Info
@@ -68,11 +72,6 @@ func (a *QQAdapter) Start() error {
 
 	go func() {
         mgr := botgo.NewSessionManager()
-        // Pass intent pointer as per SDK requirement (if it is *dto.Intent)
-        // Check local definition again: Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSource, intents *dto.Intent)
-        // event.RegisterHandlers returns dto.Intent (not pointer).
-        // So we need &intent.
-        
         if err := mgr.Start(ws, a.tokenSource, &intent); err != nil {
              a.logger.Error("QQ Bot stopped", "error", err)
         }
@@ -93,41 +92,73 @@ func (a *QQAdapter) RegisterText(handler core.Handler) {
 	a.textHandler = handler
 }
 
-// Handlers
+// --- Handlers ---
 
-func (a *QQAdapter) GroupATMessageEventHandler() event.ATMessageEventHandler {
+// Guild @Bot
+func (a *QQAdapter) GuildATMessageEventHandler() event.ATMessageEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSATMessageData) error {
         content := strings.TrimSpace(message.ETLInput(data.Content))
-        
         ctx := &QQContext{
             api: a.api,
             content: content,
-            isDirect: false,
-            // Group Message Data
+            ctxType: TypeGuild,
             channelID: data.ChannelID,
             author: data.Author,
             msgID: data.ID,
+            msgSeq: 1, // Default seq
         }
-        
         return a.dispatch(ctx, content)
 	}
 }
 
+// Guild Direct Message
 func (a *QQAdapter) DirectMessageEventHandler() event.DirectMessageEventHandler {
     return func(event *dto.WSPayload, data *dto.WSDirectMessageData) error {
         content := strings.TrimSpace(data.Content)
-        
          ctx := &QQContext{
             api: a.api,
             content: content,
-            isDirect: true,
-            // Direct Message Data
+            ctxType: TypeGuildDirect,
             guildID: data.GuildID,
             channelID: data.ChannelID,
             author: data.Author,
             msgID: data.ID,
+            msgSeq: 1,
         }
-        
+        return a.dispatch(ctx, content)
+    }
+}
+
+// Group @Bot (Qun)
+func (a *QQAdapter) GroupATMessageEventHandler() event.GroupATMessageEventHandler {
+    return func(event *dto.WSPayload, data *dto.WSGroupATMessageData) error {
+        content := strings.TrimSpace(message.ETLInput(data.Content))
+        ctx := &QQContext{
+            api: a.api,
+            content: content,
+            ctxType: TypeGroup,
+            groupID: data.GroupID,
+            author: data.Author,
+            msgID: data.ID,
+            msgSeq: 1, // Reset or manage internally
+        }
+        return a.dispatch(ctx, content)
+    }
+}
+
+// C2C Message (Private)
+func (a *QQAdapter) C2CMessageEventHandler() event.C2CMessageEventHandler {
+    return func(event *dto.WSPayload, data *dto.WSC2CMessageData) error {
+        content := strings.TrimSpace(data.Content)
+        ctx := &QQContext{
+            api: a.api,
+            content: content,
+            ctxType: TypeC2C,
+            senderID: data.Author.ID, // OpenID
+            author: data.Author,
+            msgID: data.ID,
+            msgSeq: 1,
+        }
         return a.dispatch(ctx, content)
     }
 }
@@ -148,16 +179,34 @@ func (a *QQAdapter) dispatch(ctx *QQContext, content string) error {
     return nil
 }
 
-// QQContext Implementation
+// --- QQContext ---
+
+type ContextType int
+
+const (
+    TypeGuild ContextType = iota
+    TypeGuildDirect
+    TypeGroup
+    TypeC2C
+)
+
 type QQContext struct {
     api openapi.OpenAPI
     content string
-    isDirect bool
+    ctxType ContextType
     
+    // Guild
     guildID   string
     channelID string
+    
+    // Group / C2C
+    groupID  string
+    senderID string // User OpenID for C2C
+    
+    // Common
     author    *dto.User
     msgID     string
+    msgSeq    int
 }
 
 func (c *QQContext) Sender() *core.User {
@@ -181,29 +230,50 @@ func (c *QQContext) Reply(text string) error {
 }
 
 func (c *QQContext) Send(text string) (core.Message, error) {
-    msgToPost := &dto.MessageToCreate{
-        Content: text,
-        MsgID:   c.msgID, // Reply to this message
-    }
+    slog.Info("QQ Sending Message", "type", c.ctxType, "id", c.msgID, "content", text)
     
     var msg *dto.Message
     var err error
     
-    if c.isDirect {
-        dm := &dto.DirectMessage{
+    // Basic MessageToCreate
+    msgToPost := &dto.MessageToCreate{
+        Content: text,
+        MsgID:   c.msgID,
+        MsgType: 0, // Text
+        // MsgSeq needs to be handled? 
+        // For Group/C2C, msg_seq is used for deduplication. 
+        // SDK might handle it or we pass a simple increment.
+        MsgSeq: uint32(c.msgSeq + 1), 
+    }
+
+    switch c.ctxType {
+    case TypeGuild:
+         msg, err = c.api.PostMessage(context.Background(), c.channelID, msgToPost)
+    case TypeGuildDirect:
+         dm := &dto.DirectMessage{
             GuildID: c.guildID,
             ChannelID: c.channelID,
         }
         msg, err = c.api.PostDirectMessage(context.Background(), dm, msgToPost)
-    } else {
-        msg, err = c.api.PostMessage(context.Background(), c.channelID, msgToPost)
+    case TypeGroup:
+        // Group Reply
+        msg, err = c.api.PostGroupMessage(context.Background(), c.groupID, msgToPost)
+    case TypeC2C:
+        // C2C Reply
+        msg, err = c.api.PostC2CMessage(context.Background(), c.senderID, msgToPost)
     }
     
     if err != nil {
+        slog.Error("QQ Send Failed", "error", err)
         return nil, err
     }
     
-    return &QQMessage{msg: msg, api: c.api, channelID: c.channelID}, nil
+    // Return wrapper. If msg is nil (some APIs return nil on success?), handle it.
+    if msg == nil {
+        msg = &dto.Message{ID: "unknown"}
+    }
+    
+    return &QQMessage{msg: msg, api: c.api}, nil
 }
 
 func (c *QQContext) Edit(msg core.Message, text string) error {
@@ -217,7 +287,6 @@ func (c *QQContext) Platform() string {
 type QQMessage struct {
     msg *dto.Message
     api openapi.OpenAPI
-    channelID string
 }
 
 func (m *QQMessage) ID() string {
