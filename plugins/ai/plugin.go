@@ -22,7 +22,6 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 	// Handler: /set_ai
 	ctx.RegisterCommand("/set_ai", func(c core.Context) error {
         // Parsing args from Text
-        // c.Text() includes command like "/set_ai key=..."
         text := c.Text()
         parts := strings.Fields(text)
         if len(parts) <= 1 {
@@ -30,26 +29,11 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		}
         
         args := parts[1:]
-
-		// User ID is string now
-        // Storage expects int64?
-        // We need to update Storage to support string IDs or Parse int64.
-        // Telegram IDs are int64, QQ IDs are string (OpenID).
-        // Let's update storage to use string keys or Hash string to int64 (bad idea).
-        // Better: Update storage to use string.
         
-        userIDStr := c.Sender().ID
-        // Temporary hack: storage uses int64. 
-        // If Platform is Telegram, we can parse.
-        // If QQ, we have a problem if storage expects int64.
+        // Use Platform:UserID as key to avoid collisions
+        storageKey := c.Platform() + ":" + c.Sender().ID
         
-        // Let's assume we update storage later. For now, try parse.
-        // If error, maybe use hash or 0?
-        // Actually I MUST update storage.
-        
-        // For now, let's defer storage update and implement logic assuming I fix storage.
-        
-		currentCfg := s.GetUserAIConfig(userIDStr)
+		currentCfg := s.GetUserAIConfig(storageKey)
 		
 		var newCfg config.AIConfig
 		if currentCfg != nil {
@@ -76,7 +60,7 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			}
 		}
 
-		if err := s.UpdateUserAIConfig(userIDStr, newCfg); err != nil {
+		if err := s.UpdateUserAIConfig(storageKey, newCfg); err != nil {
 			return c.Reply("保存设置失败: " + err.Error())
 		}
 
@@ -85,7 +69,8 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 
 	// Handler: /reset_ai
 	ctx.RegisterCommand("/reset_ai", func(c core.Context) error {
-		if err := s.ClearUserAIConfig(c.Sender().ID); err != nil {
+        storageKey := c.Platform() + ":" + c.Sender().ID
+		if err := s.ClearUserAIConfig(storageKey); err != nil {
 			return c.Reply("重置设置失败: " + err.Error())
 		}
 		return c.Reply("AI 设置已重置为全局默认值。")
@@ -98,14 +83,16 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		}
 
 		user := c.Sender()
-        // AllowedUsers is []int64. Need to check string ID.
-        // Config needs update too.
-		if !cfg.IsAllowed(user.ID) {
+        // Check allowed user with platform context
+		if !cfg.IsAllowed(c.Platform(), user.ID) {
+            // Optional: Log or reply if debug mode
 			return nil
 		}
+        
+        storageKey := c.Platform() + ":" + user.ID
 
 		aiCfg := cfg.AI
-		if userOverride := s.GetUserAIConfig(user.ID); userOverride != nil {
+		if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
 			aiCfg = *userOverride
 		}
 

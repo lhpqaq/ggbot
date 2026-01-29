@@ -5,7 +5,7 @@ bot:
   
   # QQ 配置 (可选)
   qq_app_id: ""
-  qq_token: ""
+  qq_secret: ""
 
 ai:
   provider: "openai" # openai, gemini 等
@@ -14,7 +14,12 @@ ai:
   model: "gpt-4o"
   default_prompt: "你是一个得力的助手。"
 
-# 允许免费使用机器人的用户 ID 列表
+# 允许免费使用机器人的用户 ID 列表 (全局)
 allowed_users:
-  - "123456789" # Telegram ID
-  - "OPENID_FROM_QQ" # QQ OpenID
+  - "123456789"
+
+# 平台特定允许列表 (推荐)
+allowed_telegram:
+  - "123456789"
+allowed_qq:
+  - "OPENID_FROM_QQ"

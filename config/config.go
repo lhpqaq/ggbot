@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -10,7 +11,12 @@ import (
 type Config struct {
 	Bot          BotConfig `yaml:"bot"`
 	AI           AIConfig  `yaml:"ai"`
-	AllowedUsers []string  `yaml:"allowed_users"`
+	// Legacy: mixed list
+	AllowedUsers []string  `yaml:"allowed_users"` 
+	
+	// Platform specific lists
+	AllowedTelegram []string `yaml:"allowed_telegram"`
+	AllowedQQ       []string `yaml:"allowed_qq"`
 }
 
 type BotConfig struct {
@@ -53,7 +59,20 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func (c *Config) IsAllowed(userID string) bool {
+func (c *Config) IsAllowed(platform string, userID string) bool {
+    // Check specific lists first
+    switch strings.ToLower(platform) {
+    case "telegram":
+        for _, id := range c.AllowedTelegram {
+            if id == userID { return true }
+        }
+    case "qq":
+        for _, id := range c.AllowedQQ {
+            if id == userID { return true }
+        }
+    }
+
+    // Fallback to legacy global list (useful for simple migration)
 	for _, id := range c.AllowedUsers {
 		if id == userID {
 			return true
