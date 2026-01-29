@@ -3,7 +3,10 @@ package telegram
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/lhpqaq/ggbot/config"
 	"github.com/lhpqaq/ggbot/core"
@@ -16,9 +19,19 @@ type TelegramAdapter struct {
 }
 
 func New(cfg config.BotConfig, logger *slog.Logger) (*TelegramAdapter, error) {
+	// 设置代理 (本地 7890 端口)
+	proxyURL, _ := url.Parse("http://127.0.0.1:7890")
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 30 * time.Second,
+	}
+
 	pref := tele.Settings{
 		Token:  cfg.Token,
 		Poller: &tele.LongPoller{Timeout: cfg.PollerTimeout},
+		Client: httpClient,
 		OnError: func(err error, c tele.Context) {
 			logger.Error("Telegram error", "error", err)
 		},
@@ -29,6 +42,7 @@ func New(cfg config.BotConfig, logger *slog.Logger) (*TelegramAdapter, error) {
 		return nil, err
 	}
 
+	logger.Info("Telegram adapter initialized with proxy", "proxy", "http://127.0.0.1:7890")
 	return &TelegramAdapter{bot: b, logger: logger}, nil
 }
 
@@ -62,12 +76,12 @@ func (a *TelegramAdapter) RegisterText(handler core.Handler) {
 }
 
 func (a *TelegramAdapter) SendTo(recipient string, text string) error {
-    id, err := strconv.ParseInt(recipient, 10, 64)
-    if err != nil {
-        return fmt.Errorf("invalid telegram recipient id: %s", recipient)
-    }
-    _, err = a.bot.Send(&tele.User{ID: id}, text)
-    return err
+	id, err := strconv.ParseInt(recipient, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid telegram recipient id: %s", recipient)
+	}
+	_, err = a.bot.Send(&tele.User{ID: id}, text)
+	return err
 }
 
 // We need a concrete context implementation

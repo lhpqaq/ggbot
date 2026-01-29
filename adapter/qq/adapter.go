@@ -42,14 +42,20 @@ type QQAdapter struct {
 }
 
 func New(cfg config.BotConfig, logger *slog.Logger) (*QQAdapter, error) {
+	// QQ 不使用代理，清除可能的代理环境变量影响
+	// 注意：这只影响当前进程的 HTTP 客户端默认行为
+
 	creds := &token.QQBotCredentials{
 		AppID:     cfg.QQAppID,
 		AppSecret: cfg.QQSecret,
 	}
 
 	ts := token.NewQQBotTokenSource(creds)
+
+	// 使用不带代理的 API 客户端
 	api := botgo.NewOpenAPI(creds.AppID, ts).WithTimeout(5 * time.Second)
 
+	logger.Info("QQ adapter initialized without proxy")
 	return &QQAdapter{
 		api:             api,
 		logger:          logger,
