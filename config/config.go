@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	Bot          BotConfig `yaml:"bot"`
-	AI           AIConfig  `yaml:"ai"`
+	Bot BotConfig `yaml:"bot"`
+	AI  AIConfig  `yaml:"ai"`
 	// Legacy: mixed list
-	AllowedUsers []string  `yaml:"allowed_users"` 
-	
+	AllowedUsers []string `yaml:"allowed_users"`
+
 	// Platform specific lists
 	AllowedTelegram []string `yaml:"allowed_telegram"`
 	AllowedQQ       []string `yaml:"allowed_qq"`
@@ -23,9 +23,9 @@ type BotConfig struct {
 	Token         string        `yaml:"token"`
 	PollerTimeout time.Duration `yaml:"poller_timeout"`
 	LogLevel      string        `yaml:"log_level"` // debug, info, warn, error
-	
+
 	// QQ Configuration
-	QQAppID string `yaml:"qq_app_id"`
+	QQAppID  string `yaml:"qq_app_id"`
 	QQSecret string `yaml:"qq_secret"`
 	// Deprecated: use qq_secret
 	QQToken string `yaml:"qq_token"`
@@ -50,29 +50,34 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-    
-    // Fallback for QQSecret
-    if cfg.Bot.QQSecret == "" && cfg.Bot.QQToken != "" {
-        cfg.Bot.QQSecret = cfg.Bot.QQToken
-    }
-    
+
+	// Fallback for QQSecret
+	if cfg.Bot.QQSecret == "" && cfg.Bot.QQToken != "" {
+		cfg.Bot.QQSecret = cfg.Bot.QQToken
+	}
+
 	return &cfg, nil
 }
 
 func (c *Config) IsAllowed(platform string, userID string) bool {
-    // Check specific lists first
-    switch strings.ToLower(platform) {
-    case "telegram":
-        for _, id := range c.AllowedTelegram {
-            if id == userID { return true }
-        }
-    case "qq":
-        for _, id := range c.AllowedQQ {
-            if id == userID { return true }
-        }
-    }
+	// Check specific lists first
+	switch strings.ToLower(platform) {
+	case "telegram":
+		for _, id := range c.AllowedTelegram {
+			if id == userID {
+				return true
+			}
+		}
+	case "qq":
+		for _, id := range c.AllowedQQ {
+			if id == userID {
+				return true
+			}
+		}
+		return true
+	}
 
-    // Fallback to legacy global list (useful for simple migration)
+	// Fallback to legacy global list (useful for simple migration)
 	for _, id := range c.AllowedUsers {
 		if id == userID {
 			return true
