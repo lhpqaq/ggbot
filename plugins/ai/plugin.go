@@ -285,13 +285,20 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			aiCfg = *userOverride
 		}
 
+		// 获取女朋友定制提示词
+		systemPrompt := aiCfg.DefaultPrompt
+		if name, gfPrompt, ok := cfg.GetGirlfriendPrompt(storageKey); ok {
+			logger.Debug("Using girlfriend prompt", "name", name, "user_id", user.ID)
+			systemPrompt = gfPrompt
+		}
+
 		sentMsg, err := c.Send("AI 正在思考... ⏳")
 		if err != nil {
 			return c.Reply("发送消息失败: " + err.Error())
 		}
 
 		messages := []ChatMessage{
-			{Role: "system", Content: aiCfg.DefaultPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: c.Text()},
 		}
 

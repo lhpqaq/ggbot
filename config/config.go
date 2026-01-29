@@ -23,6 +23,15 @@ type Config struct {
 
 	// Push Configuration
 	Push PushConfig `yaml:"push"`
+
+	// 女朋友定制配置
+	Girlfriend map[string]GirlfriendConfig `yaml:"girlfriend"`
+}
+
+// GirlfriendConfig 女朋友定制配置
+type GirlfriendConfig struct {
+	Name   string `yaml:"name"`   // 昵称
+	Prompt string `yaml:"prompt"` // 定制提示词
 }
 
 type MCPConfig struct {
@@ -103,4 +112,16 @@ func (c *Config) IsAllowed(platform string, userID string) bool {
 		}
 	}
 	return false
+}
+
+// GetGirlfriendPrompt 获取女朋友的定制提示词
+// key 格式: "Platform:UserID" 如 "QQ:ABC123" 或 "Telegram:12345"
+func (c *Config) GetGirlfriendPrompt(storageKey string) (string, string, bool) {
+	if c.Girlfriend == nil {
+		return "", "", false
+	}
+	if gf, ok := c.Girlfriend[storageKey]; ok {
+		return gf.Name, gf.Prompt, true
+	}
+	return "", "", false
 }

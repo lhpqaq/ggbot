@@ -38,3 +38,17 @@ allowed_telegram:
   - "123456789"
 allowed_qq:
   - "OPENID_FROM_QQ"
+
+# 女朋友定制配置
+# 格式: "平台:用户ID"
+girlfriend:
+  "QQ:ABC123DEF456":  # 替换为女朋友的 QQ OpenID
+    name: "宝贝"
+    prompt: |
+      你是一个温柔体贴的男朋友助手。
+      对话时要温暖、关心、体贴，适当使用一些可爱的语气词。
+      记住对方叫宝贝，要表达爱意和关心。
+      回复要简洁温馨，不要太正式。
+  "Telegram:987654321":  # 也可以配置 Telegram 用户
+    name: "亲爱的"
+    prompt: "你是一个贴心的助手，回复要温暖友善。"
