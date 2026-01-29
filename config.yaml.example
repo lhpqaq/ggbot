@@ -2,6 +2,10 @@ bot:
   token: "你的_TELEGRAM_BOT_TOKEN"
   poller_timeout: 10s
   log_level: "info" # debug, info, warn, error
+  
+  # QQ 配置 (可选)
+  qq_app_id: ""
+  qq_token: ""
 
 ai:
   provider: "openai" # openai, gemini 等
@@ -12,4 +16,5 @@ ai:
 
 # 允许免费使用机器人的用户 ID 列表
 allowed_users:
-  - 123456789
+  - "123456789" # Telegram ID
+  - "OPENID_FROM_QQ" # QQ OpenID

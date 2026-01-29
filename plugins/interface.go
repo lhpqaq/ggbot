@@ -1,21 +1,10 @@
 package plugins
 
 import (
-	"log/slog"
-
-	"github.com/lhpqaq/ggbot/config"
-	"github.com/lhpqaq/ggbot/storage"
-	tele "gopkg.in/telebot.v4"
+	"github.com/lhpqaq/ggbot/core"
 )
 
-type Context struct {
-	Bot     *tele.Bot
-	Config  *config.Config
-	Storage *storage.Storage
-	Logger  *slog.Logger
-}
+// Alias core types for easier migration or just use core directly
+type Context = core.PluginContext
+type Plugin = core.Plugin
 
-type Plugin interface {
-	Name() string
-	Init(ctx *Context) error
-}

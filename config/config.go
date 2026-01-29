@@ -10,13 +10,19 @@ import (
 type Config struct {
 	Bot          BotConfig `yaml:"bot"`
 	AI           AIConfig  `yaml:"ai"`
-	AllowedUsers []int64   `yaml:"allowed_users"`
+	AllowedUsers []string  `yaml:"allowed_users"`
 }
 
 type BotConfig struct {
 	Token         string        `yaml:"token"`
 	PollerTimeout time.Duration `yaml:"poller_timeout"`
 	LogLevel      string        `yaml:"log_level"` // debug, info, warn, error
+	
+	// QQ Configuration
+	QQAppID string `yaml:"qq_app_id"`
+	QQSecret string `yaml:"qq_secret"`
+	// Deprecated: use qq_secret
+	QQToken string `yaml:"qq_token"`
 }
 
 type AIConfig struct {
@@ -38,11 +44,16 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
+    
+    // Fallback for QQSecret
+    if cfg.Bot.QQSecret == "" && cfg.Bot.QQToken != "" {
+        cfg.Bot.QQSecret = cfg.Bot.QQToken
+    }
+    
 	return &cfg, nil
 }
 
-func (c *Config) IsAllowed(userID int64) bool {
+func (c *Config) IsAllowed(userID string) bool {
 	for _, id := range c.AllowedUsers {
 		if id == userID {
 			return true

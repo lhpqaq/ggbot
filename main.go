@@ -5,12 +5,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lhpqaq/ggbot/adapter/qq"
+	"github.com/lhpqaq/ggbot/adapter/telegram"
 	"github.com/lhpqaq/ggbot/config"
+	"github.com/lhpqaq/ggbot/core"
 	"github.com/lhpqaq/ggbot/plugins"
 	"github.com/lhpqaq/ggbot/plugins/ai"
 	"github.com/lhpqaq/ggbot/plugins/system"
 	"github.com/lhpqaq/ggbot/storage"
-	tele "gopkg.in/telebot.v4"
 )
 
 func main() {
@@ -46,30 +48,50 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 4. Initialize Bot
-	pref := tele.Settings{
-		Token:  cfg.Bot.Token,
-		Poller: &tele.LongPoller{Timeout: cfg.Bot.PollerTimeout},
-		OnError: func(err error, c tele.Context) {
-			logger.Error("Telebot error", "error", err)
-		},
+	// 4. Initialize Platforms
+	var platforms []core.Platform
+
+	// Telegram
+	if cfg.Bot.Token != "" {
+		teleAdapter, err := telegram.New(cfg.Bot, logger)
+		if err != nil {
+			logger.Error("Failed to init Telegram", "error", err)
+		} else {
+			platforms = append(platforms, teleAdapter)
+		}
 	}
 
-	b, err := tele.NewBot(pref)
-	if err != nil {
-		logger.Error("Failed to start bot", "error", err)
-		os.Exit(1)
+	// QQ
+	if cfg.Bot.QQAppID != "" {
+		qqAdapter, err := qq.New(cfg.Bot, logger)
+		if err != nil {
+			logger.Error("Failed to init QQ", "error", err)
+		} else {
+			platforms = append(platforms, qqAdapter)
+		}
 	}
-
-	// Middleware
-	b.Use(LoggerMiddleware(logger))
+    
+    if len(platforms) == 0 {
+        logger.Error("No platforms configured or initialized successfully")
+        os.Exit(1)
+    }
 
 	// 5. Initialize Plugins
+	// We create a composite registration function that registers on ALL platforms
 	pluginCtx := &plugins.Context{
-		Bot:     b,
 		Config:  cfg,
 		Storage: store,
 		Logger:  logger,
+		RegisterCommand: func(cmd string, h core.Handler) {
+			for _, p := range platforms {
+				p.RegisterCommand(cmd, h)
+			}
+		},
+		RegisterText: func(h core.Handler) {
+			for _, p := range platforms {
+				p.RegisterText(h)
+			}
+		},
 	}
 
 	allPlugins := []plugins.Plugin{
@@ -85,24 +107,13 @@ func main() {
 		}
 	}
 
-	logger.Info("Bot started!")
-	b.Start()
-}
+	// 6. Start Platforms
+    for _, p := range platforms {
+        if err := p.Start(); err != nil {
+             logger.Error("Failed to start platform", "platform", p.Name(), "error", err)
+        }
+    }
 
-func LoggerMiddleware(logger *slog.Logger) tele.MiddlewareFunc {
-	return func(next tele.HandlerFunc) tele.HandlerFunc {
-		return func(c tele.Context) error {
-			sender := c.Sender()
-			text := c.Text()
-
-			// Log basic info about the incoming update
-			logger.Info("Update received",
-				"user_id", sender.ID,
-				"username", sender.Username,
-				"text", text,
-			)
-
-			return next(c)
-		}
-	}
+    // Block forever
+	select {}
 }
