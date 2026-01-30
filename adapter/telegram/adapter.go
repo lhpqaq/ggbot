@@ -18,14 +18,28 @@ type TelegramAdapter struct {
 	logger *slog.Logger
 }
 
-func New(cfg config.BotConfig, logger *slog.Logger) (*TelegramAdapter, error) {
-	// 设置代理 (本地 7890 端口)
-	proxyURL, _ := url.Parse("http://127.0.0.1:7890")
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
-		Timeout: 30 * time.Second,
+func New(cfg config.BotConfig, proxyCfg config.ProxyConfig, logger *slog.Logger) (*TelegramAdapter, error) {
+	var httpClient *http.Client
+
+	// 根据配置决定是否使用代理
+	if proxyCfg.TelegramUseProxy && proxyCfg.URL != "" {
+		proxyURL, err := url.Parse(proxyCfg.URL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %w", err)
+		}
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+			},
+			Timeout: 30 * time.Second,
+		}
+		logger.Info("Telegram adapter initialized with proxy", "proxy", proxyCfg.URL)
+	} else {
+		// 不使用代理
+		httpClient = &http.Client{
+			Timeout: 30 * time.Second,
+		}
+		logger.Info("Telegram adapter initialized without proxy")
 	}
 
 	pref := tele.Settings{
@@ -42,7 +56,6 @@ func New(cfg config.BotConfig, logger *slog.Logger) (*TelegramAdapter, error) {
 		return nil, err
 	}
 
-	logger.Info("Telegram adapter initialized with proxy", "proxy", "http://127.0.0.1:7890")
 	return &TelegramAdapter{bot: b, logger: logger}, nil
 }
 

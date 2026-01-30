@@ -2,10 +2,16 @@ bot:
   token: "你的_TELEGRAM_BOT_TOKEN"
   poller_timeout: 10s
   log_level: "info"
-  
+
   # QQ 配置 (可选)
   qq_app_id: ""
   qq_secret: ""
+
+# 代理配置
+proxy:
+  url: "http://127.0.0.1:7890"  # 代理地址
+  telegram_use_proxy: true       # Telegram 是否使用代理，默认 false
+  qq_use_proxy: false            # QQ 是否使用代理，默认 false (QQ 一定不走代理)
 
 ai:
   provider: "openai"
@@ -16,11 +22,21 @@ ai:
 
 # MCP 服务器配置
 mcpServers:
+  # HTTP/SSE 类型示例
   hotnews:
     type: "sse"
     url: "https://dashscope.aliyuncs.com/api/v1/mcps/hotnews/sse"
     headers:
       Authorization: "Bearer ${DASHSCOPE_API_KEY}"  # 使用环境变量
+    use_proxy: true  # 是否使用代理，默认 false，设为 true 则使用上面配置的代理地址
+
+  # Stdio 类型示例（通过命令启动）
+  bingcn:
+    type: "stdio"      # 或者省略 type，有 command 字段会自动识别为 stdio
+    command: "npx"     # 执行的命令
+    args:              # 命令参数
+      - "bing-cn-mcp"
+    # stdio 类型不需要 use_proxy，因为是本地进程通信
 
 # 定时推送配置
 push:

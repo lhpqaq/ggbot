@@ -18,6 +18,9 @@ type Config struct {
 	AllowedTelegram []string `yaml:"allowed_telegram"`
 	AllowedQQ       []string `yaml:"allowed_qq"`
 
+	// Proxy Configuration
+	Proxy ProxyConfig `yaml:"proxy"`
+
 	// MCP Configuration
 	MCPServers map[string]MCPConfig `yaml:"mcpServers"`
 
@@ -34,10 +37,22 @@ type GirlfriendConfig struct {
 	Prompt string `yaml:"prompt"` // 定制提示词
 }
 
+// ProxyConfig 代理配置
+type ProxyConfig struct {
+	URL              string `yaml:"url"`               // 代理地址，如 "http://127.0.0.1:7890"
+	TelegramUseProxy bool   `yaml:"telegram_use_proxy"` // Telegram 是否使用代理，默认 false
+	QQUseProxy       bool   `yaml:"qq_use_proxy"`       // QQ 是否使用代理，默认 false (强制不走代理)
+}
+
 type MCPConfig struct {
-	Type    string            `yaml:"type"` // e.g. "streamable_http", "sse"
-	URL     string            `yaml:"url"`
-	Headers map[string]string `yaml:"headers"` // Custom headers for authentication
+	Type     string            `yaml:"type"`      // e.g. "streamable_http", "sse", "stdio"
+	URL      string            `yaml:"url"`       // For http/sse type
+	Headers  map[string]string `yaml:"headers"`   // Custom headers for authentication
+	UseProxy bool              `yaml:"use_proxy"` // Whether to use proxy, default true
+
+	// For stdio type (command-based)
+	Command string   `yaml:"command"` // Command to execute, e.g. "npx"
+	Args    []string `yaml:"args"`    // Command arguments, e.g. ["bing-cn-mcp"]
 }
 
 type PushConfig struct {

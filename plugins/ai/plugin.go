@@ -42,7 +42,7 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 	logger := ctx.Logger
 
 	// Initialize MCP Manager and Tool Executor
-	p.mcpManager = NewMCPManager(logger)
+	p.mcpManager = NewMCPManager(cfg.Proxy, logger)
 	p.toolExecutor = NewToolExecutor(p.mcpManager, logger)
 
 	// Connect to all MCP servers

@@ -53,7 +53,7 @@ func main() {
 
 	// Telegram
 	if cfg.Bot.Token != "" {
-		teleAdapter, err := telegram.New(cfg.Bot, logger)
+		teleAdapter, err := telegram.New(cfg.Bot, cfg.Proxy, logger)
 		if err != nil {
 			logger.Error("Failed to init Telegram", "error", err)
 		} else {
@@ -61,7 +61,7 @@ func main() {
 		}
 	}
 
-	// QQ
+	// QQ - 强制不使用代理
 	if cfg.Bot.QQAppID != "" {
 		qqAdapter, err := qq.New(cfg.Bot, logger)
 		if err != nil {

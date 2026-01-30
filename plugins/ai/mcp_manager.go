@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ type MCPManager struct {
 	mu         sync.RWMutex
 	logger     *slog.Logger
 	httpClient *http.Client
+	proxyCfg   config.ProxyConfig
 }
 
 type mcpSession struct {
@@ -30,23 +33,29 @@ type mcpSession struct {
 	failCount   int
 	mu          sync.Mutex
 	closed      bool
+	cmd         *exec.Cmd // For stdio-based connections
 }
 
 // NewMCPManager creates a new MCP manager
-func NewMCPManager(logger *slog.Logger) *MCPManager {
-	return &MCPManager{
-		sessions: make(map[string]*mcpSession),
-		toolMap:  make(map[string]*mcpSession),
-		tools:    []ToolDefinition{},
-		logger:   logger,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
+func NewMCPManager(proxyCfg config.ProxyConfig, logger *slog.Logger) *MCPManager {
+	// 创建默认 HTTP 客户端（不使用代理）
+	// MCP 服务器通过 use_proxy 字段单独控制是否使用代理
+	defaultClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
 		},
+	}
+
+	return &MCPManager{
+		sessions:   make(map[string]*mcpSession),
+		toolMap:    make(map[string]*mcpSession),
+		tools:      []ToolDefinition{},
+		logger:     logger,
+		httpClient: defaultClient,
+		proxyCfg:   proxyCfg,
 	}
 }
 
@@ -67,34 +76,81 @@ func (m *MCPManager) ConnectServers(ctx context.Context, mcpConfigs map[string]c
 
 // connectServer connects to a single MCP server with retry
 func (m *MCPManager) connectServer(ctx context.Context, name string, mcpCfg config.MCPConfig) error {
-	m.logger.Info("Connecting to MCP server", "name", name, "url", mcpCfg.URL, "type", mcpCfg.Type)
+	m.logger.Info("Connecting to MCP server", "name", name, "type", mcpCfg.Type, "url", mcpCfg.URL, "command", mcpCfg.Command)
 
-	// Create HTTP client with custom headers
-	var httpClient *http.Client
-	if len(mcpCfg.Headers) > 0 {
-		httpClient = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &headerTransport{
-				headers: mcpCfg.Headers,
-				base:    m.httpClient.Transport,
-			},
-		}
-	} else {
-		httpClient = m.httpClient
-	}
-
-	// Create transport
 	var transport mcp.Transport
-	switch mcpCfg.Type {
-	case "sse":
-		transport = &mcp.SSEClientTransport{
-			Endpoint:   mcpCfg.URL,
-			HTTPClient: httpClient,
+	var cmd *exec.Cmd
+
+	// Determine transport type
+	if mcpCfg.Type == "stdio" || mcpCfg.Command != "" {
+		// stdio type: launch command and communicate via stdin/stdout
+		if mcpCfg.Command == "" {
+			return fmt.Errorf("command is required for stdio type")
 		}
-	default: // streamable_http or default
-		transport = &mcp.StreamableClientTransport{
-			Endpoint:   mcpCfg.URL,
-			HTTPClient: httpClient,
+
+		m.logger.Info("Starting MCP command", "name", name, "command", mcpCfg.Command, "args", mcpCfg.Args)
+
+		cmd = exec.CommandContext(ctx, mcpCfg.Command, mcpCfg.Args...)
+		transport = &mcp.CommandTransport{
+			Command: cmd,
+		}
+
+		m.logger.Info("MCP server will use stdio transport", "name", name)
+	} else {
+		// HTTP/SSE type: create HTTP client with or without proxy
+		var baseTransport http.RoundTripper
+		if mcpCfg.UseProxy && m.proxyCfg.URL != "" {
+			// Use proxy
+			proxyURL, err := url.Parse(m.proxyCfg.URL)
+			if err != nil {
+				return fmt.Errorf("invalid proxy URL: %w", err)
+			}
+			baseTransport = &http.Transport{
+				Proxy:               http.ProxyURL(proxyURL),
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			}
+			m.logger.Info("MCP server will use proxy", "name", name, "proxy", m.proxyCfg.URL)
+		} else {
+			// No proxy - create new transport without proxy
+			baseTransport = &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			}
+			m.logger.Info("MCP server will NOT use proxy", "name", name)
+		}
+
+		// Create HTTP client with custom headers if needed
+		var httpClient *http.Client
+		if len(mcpCfg.Headers) > 0 {
+			httpClient = &http.Client{
+				Timeout: 30 * time.Second,
+				Transport: &headerTransport{
+					headers: mcpCfg.Headers,
+					base:    baseTransport,
+				},
+			}
+		} else {
+			httpClient = &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: baseTransport,
+			}
+		}
+
+		// Create transport based on type
+		switch mcpCfg.Type {
+		case "sse":
+			transport = &mcp.SSEClientTransport{
+				Endpoint:   mcpCfg.URL,
+				HTTPClient: httpClient,
+			}
+		default: // streamable_http or default
+			transport = &mcp.StreamableClientTransport{
+				Endpoint:   mcpCfg.URL,
+				HTTPClient: httpClient,
+			}
 		}
 	}
 
@@ -117,6 +173,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, mcpCfg conf
 		config:    mcpCfg,
 		lastUsed:  time.Now(),
 		failCount: 0,
+		cmd:       cmd, // Save command for cleanup (nil for HTTP/SSE)
 	}
 
 	m.sessions[name] = mcpSess
@@ -261,6 +318,17 @@ func (m *MCPManager) Close() error {
 			} else {
 				m.logger.Info("Closed MCP session", "name", name)
 			}
+
+			// If this is a stdio session, wait for command to exit
+			if sess.cmd != nil && sess.cmd.Process != nil {
+				m.logger.Info("Waiting for MCP command to exit", "name", name, "pid", sess.cmd.Process.Pid)
+				// The CommandTransport.Close() should have already handled graceful shutdown
+				// Just log if the process is still running
+				if sess.cmd.ProcessState == nil || !sess.cmd.ProcessState.Exited() {
+					m.logger.Debug("MCP command process cleanup in progress", "name", name)
+				}
+			}
+
 			sess.closed = true
 		}
 		sess.mu.Unlock()
