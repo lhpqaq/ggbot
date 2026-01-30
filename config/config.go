@@ -102,6 +102,7 @@ func (c *Config) IsAllowed(platform string, userID string) bool {
 				return true
 			}
 		}
+		// 全部允许
 		return true
 	}
 

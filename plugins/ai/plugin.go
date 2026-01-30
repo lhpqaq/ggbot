@@ -2,8 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -12,7 +10,6 @@ import (
 	"github.com/lhpqaq/ggbot/config"
 	"github.com/lhpqaq/ggbot/core"
 	"github.com/lhpqaq/ggbot/plugins"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
@@ -31,9 +28,8 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type AIPlugin struct {
-	sessions map[string]*mcp.ClientSession
-	tools    []ToolDefinition
-	toolMap  map[string]*mcp.ClientSession
+	mcpManager   *MCPManager
+	toolExecutor *ToolExecutor
 }
 
 func (p *AIPlugin) Name() string {
@@ -45,78 +41,28 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 	cfg := ctx.Config
 	logger := ctx.Logger
 
-	// Initialize MCP Clients
-	p.sessions = make(map[string]*mcp.ClientSession)
-	p.toolMap = make(map[string]*mcp.ClientSession)
-	p.tools = []ToolDefinition{}
+	// Initialize MCP Manager and Tool Executor
+	p.mcpManager = NewMCPManager(logger)
+	p.toolExecutor = NewToolExecutor(p.mcpManager, logger)
 
-	for name, mcpCfg := range cfg.MCPServers {
-		logger.Info("Initializing MCP Server", "name", name, "url", mcpCfg.URL, "type", mcpCfg.Type)
+	// Connect to all MCP servers
+	if len(cfg.MCPServers) > 0 {
+		connectCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-		// Create HTTP client with custom headers if needed
-		var httpClient *http.Client
-		if len(mcpCfg.Headers) > 0 {
-			httpClient = &http.Client{
-				Transport: &headerTransport{
-					headers: mcpCfg.Headers,
-					base:    http.DefaultTransport,
-				},
-			}
+		if err := p.mcpManager.ConnectServers(connectCtx, cfg.MCPServers); err != nil {
+			logger.Error("Failed to connect to some MCP servers", "error", err)
+			// Continue anyway - some servers may have connected successfully
 		}
 
-		// Create Transport based on type
-		var transport mcp.Transport
-		switch mcpCfg.Type {
-		case "sse":
-			transport = &mcp.SSEClientTransport{
-				Endpoint:   mcpCfg.URL,
-				HTTPClient: httpClient,
+		// Log connection status
+		health := p.mcpManager.HealthCheck(context.Background())
+		for name, isHealthy := range health {
+			if isHealthy {
+				logger.Info("MCP server healthy", "name", name)
+			} else {
+				logger.Warn("MCP server unhealthy", "name", name)
 			}
-		default: // streamable_http or default
-			transport = &mcp.StreamableClientTransport{
-				Endpoint:   mcpCfg.URL,
-				HTTPClient: httpClient,
-			}
-		}
-
-		// Create Client
-		client := mcp.NewClient(&mcp.Implementation{Name: "ggbot", Version: "1.0"}, nil)
-
-		// Connect
-		session, err := client.Connect(context.Background(), transport, nil)
-		if err != nil {
-			logger.Error("Failed to connect to MCP server", "name", name, "error", err)
-			continue
-		}
-
-		p.sessions[name] = session
-
-		// List tools
-		toolIter := session.Tools(context.Background(), nil)
-
-		for tool, err := range toolIter {
-			if err != nil {
-				logger.Error("Error listing tools", "name", name, "error", err)
-				break
-			}
-			logger.Info("Tool discovered", "tool", tool.Name)
-
-			// Convert InputSchema (any) to json.RawMessage
-			schemaBytes, err := json.Marshal(tool.InputSchema)
-			if err != nil {
-				logger.Error("Failed to marshal tool schema", "tool", tool.Name, "error", err)
-				continue
-			}
-
-			p.tools = append(p.tools, ToolDefinition{
-				Type: "function",
-				Function: Function{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  json.RawMessage(schemaBytes),
-				},
-			})
-			p.toolMap[tool.Name] = session
 		}
 	}
 
@@ -196,77 +142,22 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			{Role: "user", Content: "请搜索获取今日最新新闻并总结要点，列出具体的新闻事件"},
 		}
 
-		// 执行工具调用循环（最多5轮）
-		for i := 0; i < 5; i++ {
-			logger.Debug("News generation", "iteration", i)
+		// Use tool executor for cleaner code
+		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
 
-			respMsg, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, p.tools)
-			if err != nil {
-				logger.Error("News AI Generation Error", "error", err)
-				_ = c.Edit(sentMsg, "获取新闻时出错: "+err.Error())
-				return nil
-			}
-
-			messages = append(messages, *respMsg)
-			// 如果有工具调用，执行它们
-			if len(respMsg.ToolCalls) > 0 {
-				for _, call := range respMsg.ToolCalls {
-					session, ok := p.toolMap[call.Function.Name]
-					if !ok {
-						logger.Error("Tool not found", "name", call.Function.Name)
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    "Error: Tool not found",
-						})
-						continue
-					}
-
-					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    fmt.Sprintf("Error parsing arguments: %v", err),
-						})
-						continue
-					}
-
-					logger.Info("Executing Tool for News", "tool", call.Function.Name)
-
-					res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-						Name:      call.Function.Name,
-						Arguments: args,
-					})
-
-					var contentStr string
-					if err != nil {
-						contentStr = fmt.Sprintf("Error executing tool: %v", err)
-					} else {
-						for _, content := range res.Content {
-							if textContent, ok := content.(*mcp.TextContent); ok {
-								contentStr += textContent.Text
-							}
-						}
-					}
-					logger.Debug("Tool execution result", "content", contentStr)
-					messages = append(messages, ChatMessage{
-						Role:       "tool",
-						ToolCallID: call.ID,
-						Content:    contentStr,
-					})
-				}
-			} else {
-				// 获得最终回复
-				if err := c.Edit(sentMsg, respMsg.Content); err != nil {
-					logger.Error("Failed to edit message", "error", err)
-					return c.Reply(respMsg.Content)
-				}
-				return nil
-			}
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		if err != nil {
+			logger.Error("News generation error", "error", err)
+			_ = c.Edit(sentMsg, "获取新闻时出错: "+err.Error())
+			return nil
 		}
 
-		return c.Edit(sentMsg, "新闻获取轮次过多，已停止。")
+		if err := c.Edit(sentMsg, finalContent); err != nil {
+			logger.Error("Failed to edit message", "error", err)
+			return c.Reply(finalContent)
+		}
+		return nil
 	})
 
 	// Handler: /s - 搜索指令，使用 MCP 工具搜索
@@ -313,78 +204,22 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			{Role: "user", Content: query},
 		}
 
-		// 执行工具调用循环（最多5轮）
-		for i := 0; i < 5; i++ {
-			logger.Debug("Search generation", "query", query, "iteration", i)
+		// Use tool executor
+		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
 
-			respMsg, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, p.tools)
-			if err != nil {
-				logger.Error("Search AI Generation Error", "error", err)
-				_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
-				return nil
-			}
-
-			messages = append(messages, *respMsg)
-
-			// 如果有工具调用，执行它们
-			if len(respMsg.ToolCalls) > 0 {
-				for _, call := range respMsg.ToolCalls {
-					session, ok := p.toolMap[call.Function.Name]
-					if !ok {
-						logger.Error("Tool not found", "name", call.Function.Name)
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    "Error: Tool not found",
-						})
-						continue
-					}
-
-					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    fmt.Sprintf("Error parsing arguments: %v", err),
-						})
-						continue
-					}
-
-					logger.Info("Executing Tool for Search", "tool", call.Function.Name)
-
-					res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-						Name:      call.Function.Name,
-						Arguments: args,
-					})
-
-					var contentStr string
-					if err != nil {
-						contentStr = fmt.Sprintf("Error executing tool: %v", err)
-					} else {
-						for _, content := range res.Content {
-							if textContent, ok := content.(*mcp.TextContent); ok {
-								contentStr += textContent.Text
-							}
-						}
-					}
-					logger.Debug("Search tool result", "content_length", len(contentStr))
-					messages = append(messages, ChatMessage{
-						Role:       "tool",
-						ToolCallID: call.ID,
-						Content:    contentStr,
-					})
-				}
-			} else {
-				// 获得最终回复
-				if err := c.Edit(sentMsg, respMsg.Content); err != nil {
-					logger.Error("Failed to edit message", "error", err)
-					return c.Reply(respMsg.Content)
-				}
-				return nil
-			}
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		if err != nil {
+			logger.Error("Search error", "error", err)
+			_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
+			return nil
 		}
 
-		return c.Edit(sentMsg, "搜索轮次过多，已停止。")
+		if err := c.Edit(sentMsg, finalContent); err != nil {
+			logger.Error("Failed to edit message", "error", err)
+			return c.Reply(finalContent)
+		}
+		return nil
 	})
 
 	// Handler: Text (AI Chat)
@@ -420,86 +255,22 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			{Role: "user", Content: c.Text()},
 		}
 
-		// Loop for tool calls (max 5 turns)
-		for i := 0; i < 5; i++ {
-			logger.Debug("Generating AI response", "user_id", user.ID, "iteration", i)
+		// Use tool executor
+		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
 
-			respMsg, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, p.tools)
-			if err != nil {
-				logger.Error("AI Generation Error", "user_id", user.ID, "error", err)
-				_ = c.Edit(sentMsg, "生成回复时出错: "+err.Error())
-				return nil
-			}
-
-			messages = append(messages, *respMsg)
-
-			// Check if tool calls
-			if len(respMsg.ToolCalls) > 0 {
-				// Execute tools
-				for _, call := range respMsg.ToolCalls {
-					session, ok := p.toolMap[call.Function.Name]
-					if !ok {
-						logger.Error("Tool not found", "name", call.Function.Name)
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    "Error: Tool not found",
-						})
-						continue
-					}
-
-					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-						messages = append(messages, ChatMessage{
-							Role:       "tool",
-							ToolCallID: call.ID,
-							Content:    fmt.Sprintf("Error parsing arguments: %v", err),
-						})
-						continue
-					}
-
-					logger.Info("Executing Tool", "tool", call.Function.Name)
-
-					// CallTool using SDK
-					res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-						Name:      call.Function.Name,
-						Arguments: args,
-					})
-
-					var contentStr string
-					if err != nil {
-						contentStr = fmt.Sprintf("Error executing tool: %v", err)
-					} else {
-						// Extract text content from result
-						for _, content := range res.Content {
-							if textContent, ok := content.(*mcp.TextContent); ok {
-								contentStr += textContent.Text
-							} else {
-								// Just in case, try JSON debug dump
-								b, _ := json.Marshal(content)
-								logger.Debug("Unknown tool content type", "json", string(b))
-							}
-						}
-					}
-
-					messages = append(messages, ChatMessage{
-						Role:       "tool",
-						ToolCallID: call.ID,
-						Content:    contentStr,
-					})
-				}
-				// Loop continues
-			} else {
-				// Final response
-				if err := c.Edit(sentMsg, respMsg.Content); err != nil {
-					logger.Error("Failed to edit message", "error", err)
-					return c.Reply(respMsg.Content)
-				}
-				return nil
-			}
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		if err != nil {
+			logger.Error("AI generation error", "user_id", user.ID, "error", err)
+			_ = c.Edit(sentMsg, "生成回复时出错: "+err.Error())
+			return nil
 		}
 
-		return c.Edit(sentMsg, "AI 思考轮次过多，已停止。")
+		if err := c.Edit(sentMsg, finalContent); err != nil {
+			logger.Error("Failed to edit message", "error", err)
+			return c.Reply(finalContent)
+		}
+		return nil
 	})
 
 	return nil
@@ -534,48 +305,22 @@ func (p *AIPlugin) executePush(ctx *plugins.Context) {
 		{Role: "system", Content: "You are a news reporter."},
 		{Role: "user", Content: ctx.Config.Push.Prompt},
 	}
-	var content string
-	for i := 0; i < 5; i++ {
-		respMsg, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, p.tools)
-		if err != nil {
-			ctx.Logger.Error("Push Generation Error", "error", err)
-			return
-		}
-		messages = append(messages, *respMsg)
 
-		if len(respMsg.ToolCalls) > 0 {
-			for _, call := range respMsg.ToolCalls {
-				session, ok := p.toolMap[call.Function.Name]
-				if !ok {
-					continue
-				}
-				var args map[string]interface{}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+	// Use tool executor with timeout
+	executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
 
-				res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-					Name:      call.Function.Name,
-					Arguments: args,
-				})
-
-				var contentStr string
-				if err == nil {
-					for _, c := range res.Content {
-						if tc, ok := c.(*mcp.TextContent); ok {
-							contentStr += tc.Text
-						}
-					}
-				}
-				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: contentStr})
-			}
-		} else {
-			content = respMsg.Content
-			break
-		}
+	content, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+	if err != nil {
+		ctx.Logger.Error("Push generation error", "error", err)
+		return
 	}
+
 	if content == "" {
 		ctx.Logger.Error("Push content empty")
 		return
 	}
+
 	for _, target := range ctx.Config.Push.Targets {
 		ctx.Logger.Info("Pushing to target", "target", target)
 		if ctx.SendTo != nil {
@@ -584,4 +329,12 @@ func (p *AIPlugin) executePush(ctx *plugins.Context) {
 			}
 		}
 	}
+}
+
+// Cleanup closes MCP connections when plugin is unloaded
+func (p *AIPlugin) Cleanup() error {
+	if p.mcpManager != nil {
+		return p.mcpManager.Close()
+	}
+	return nil
 }
