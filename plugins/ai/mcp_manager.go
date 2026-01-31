@@ -88,9 +88,42 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, mcpCfg conf
 			return fmt.Errorf("command is required for stdio type")
 		}
 
-		m.logger.Info("Starting MCP command", "name", name, "command", mcpCfg.Command, "args", mcpCfg.Args)
+		m.logger.Info("Starting MCP command", "name", name, "command", mcpCfg.Command, "args", mcpCfg.Args, "env_count", len(mcpCfg.Env), "use_proxy", mcpCfg.UseProxy)
 
 		cmd = exec.CommandContext(ctx, mcpCfg.Command, mcpCfg.Args...)
+
+		// Start with parent process environment
+		cmd.Env = append([]string{}, cmd.Environ()...)
+
+		// Set proxy environment variables for the child process
+		if mcpCfg.UseProxy && m.proxyCfg.URL != "" {
+			// Set standard proxy environment variables
+			proxyEnvVars := []string{
+				fmt.Sprintf("HTTP_PROXY=%s", m.proxyCfg.URL),
+				fmt.Sprintf("HTTPS_PROXY=%s", m.proxyCfg.URL),
+				fmt.Sprintf("http_proxy=%s", m.proxyCfg.URL),
+				fmt.Sprintf("https_proxy=%s", m.proxyCfg.URL),
+			}
+			cmd.Env = append(cmd.Env, proxyEnvVars...)
+			m.logger.Info("MCP command will use proxy", "name", name, "proxy", m.proxyCfg.URL)
+		} else {
+			// Explicitly disable proxy by unsetting proxy environment variables
+			// This prevents the child process from inheriting proxy settings
+			m.logger.Info("MCP command will NOT use proxy", "name", name)
+			// Note: We don't unset here, just don't add proxy vars
+			// If you want to explicitly disable, uncomment below:
+			// cmd.Env = append(cmd.Env, "HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy=")
+		}
+
+		// Add custom environment variables (these can override proxy settings if needed)
+		if len(mcpCfg.Env) > 0 {
+			for key, value := range mcpCfg.Env {
+				envVar := fmt.Sprintf("%s=%s", key, value)
+				cmd.Env = append(cmd.Env, envVar)
+				m.logger.Debug("Setting MCP environment variable", "name", name, "key", key)
+			}
+		}
+
 		transport = &mcp.CommandTransport{
 			Command: cmd,
 		}

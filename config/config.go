@@ -54,8 +54,9 @@ type MCPConfig struct {
 	UseProxy bool              `yaml:"use_proxy"` // Whether to use proxy, default true
 
 	// For stdio type (command-based)
-	Command string   `yaml:"command"` // Command to execute, e.g. "npx"
-	Args    []string `yaml:"args"`    // Command arguments, e.g. ["bing-cn-mcp"]
+	Command string            `yaml:"command"` // Command to execute, e.g. "npx"
+	Args    []string          `yaml:"args"`    // Command arguments, e.g. ["bing-cn-mcp"]
+	Env     map[string]string `yaml:"env"`     // Environment variables for the command
 }
 
 type PushConfig struct {

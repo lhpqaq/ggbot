@@ -41,7 +41,17 @@ mcpServers:
     command: "npx"     # 执行的命令
     args:              # 命令参数
       - "bing-cn-mcp"
-    # stdio 类型不需要 use_proxy，因为是本地进程通信
+    use_proxy: false   # stdio 类型也可以设置是否使用代理（控制子进程的网络请求）
+
+  # Stdio 类型示例（带环境变量和代理）
+  news:
+    command: "npx"
+    args:
+      - "news-mcp-server"
+    use_proxy: true    # 子进程的网络请求会使用代理
+    env:               # 环境变量（可选）
+      NEWS_API_KEY: "your_api_key_here"
+      NEWS_BASE_URL: "https://newsdata.io"
 
 # 定时推送配置
 push:
