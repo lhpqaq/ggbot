@@ -87,7 +87,41 @@ func (e *ToolExecutor) ExecuteWithTools(
 		}
 	}
 
-	return "", fmt.Errorf("exceeded maximum iterations (%d) without final response", maxIterations)
+	// Exceeded max iterations - force final response based on current information
+	e.logger.Warn("Exceeded maximum iterations, generating final response based on current information", "max_iterations", maxIterations)
+
+	// Add a message asking AI to summarize based on what it has so far
+	messages = append(messages, ChatMessage{
+		Role:    "user",
+		Content: "请基于目前已经获得的信息，给出你的最终回复。即使信息不完整，也请尽可能给出有用的答案。",
+	})
+
+	// Generate final response without tools
+	finalResp, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, messages, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate final response after max iterations: %w", err)
+	}
+
+	finalContent := finalResp.Content
+
+	// Apply platform-specific prompt if provided
+	if platformPrompt != "" && finalContent != "" {
+		e.logger.Debug("Applying platform prompt for final response")
+
+		finalMessages := []ChatMessage{
+			{Role: "user", Content: fmt.Sprintf("%s\n\n请按照以下要求重新组织你的回复：%s", finalContent, platformPrompt)},
+		}
+
+		polishedResp, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, finalMessages, nil)
+		if err != nil {
+			e.logger.Warn("Failed to apply platform prompt, using original response", "error", err)
+			return finalContent, nil
+		}
+
+		return polishedResp.Content, nil
+	}
+
+	return finalContent, nil
 }
 
 // executeToolCalls executes all tool calls and appends results to messages
