@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lhpqaq/ggbot/config"
 	"log/slog"
+
+	"github.com/lhpqaq/ggbot/config"
 )
 
 // ToolExecutor handles AI tool calling loops

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/lhpqaq/ggbot/config"
 	"github.com/lhpqaq/ggbot/core"
 	"github.com/lhpqaq/ggbot/plugins"
+	"github.com/lhpqaq/ggbot/storage"
 )
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
@@ -34,6 +36,58 @@ type AIPlugin struct {
 
 func (p *AIPlugin) Name() string {
 	return "AI"
+}
+
+// handleRequest 在独立的 goroutine 中处理请求
+func (p *AIPlugin) handleRequest(
+	ctx core.Context,
+	cfg *config.Config,
+	s *storage.Storage,
+	logger *slog.Logger,
+	systemPrompt string,
+	userMessage string,
+) {
+	user := ctx.Sender()
+	storageKey := ctx.Platform() + ":" + user.ID
+
+	// Get AI config
+	aiCfg := cfg.AI
+	if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
+		aiCfg = *userOverride
+	}
+
+	// Send initial message
+	sentMsg, err := ctx.Send("AI 正在思考... ⏳")
+	if err != nil {
+		logger.Error("Failed to send initial message", "error", err)
+		_ = ctx.Reply("发送消息失败: " + err.Error())
+		return
+	}
+
+	// Build messages
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userMessage},
+	}
+
+	// Execute with tools
+	executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Get platform-specific prompt
+	platformPrompt := cfg.GetPlatformPrompt(ctx.Platform())
+
+	finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 10, platformPrompt)
+	if err != nil {
+		logger.Error("AI generation error", "user_id", user.ID, "error", err)
+		_ = ctx.Edit(sentMsg, "生成回复时出错: "+err.Error())
+		return
+	}
+
+	if err := ctx.Edit(sentMsg, finalContent); err != nil {
+		logger.Error("Failed to edit message", "error", err)
+		_ = ctx.Reply(finalContent)
+	}
 }
 
 func (p *AIPlugin) Init(ctx *plugins.Context) error {
@@ -126,40 +180,43 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 			return nil
 		}
 
-		storageKey := c.Platform() + ":" + user.ID
-		aiCfg := cfg.AI
-		if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
-			aiCfg = *userOverride
-		}
+		// Handle request asynchronously
+		go func() {
+			storageKey := c.Platform() + ":" + user.ID
+			aiCfg := cfg.AI
+			if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
+				aiCfg = *userOverride
+			}
 
-		sentMsg, err := c.Send("正在获取今日新闻... 📰")
-		if err != nil {
-			return c.Reply("发送消息失败: " + err.Error())
-		}
+			sentMsg, err := c.Send("正在获取今日新闻... 📰")
+			if err != nil {
+				logger.Error("Failed to send message", "error", err)
+				return
+			}
 
-		messages := []ChatMessage{
-			{Role: "system", Content: "你是一个专业的新闻播报员。请获取最新新闻并进行简洁清晰的总结，用中文回复。"},
-			{Role: "user", Content: "请搜索获取今日最新新闻并总结要点，列出具体的新闻事件"},
-		}
+			messages := []ChatMessage{
+				{Role: "system", Content: "你是一个专业的新闻播报员。请获取最新新闻并进行简洁清晰的总结，用中文回复。"},
+				{Role: "user", Content: "请搜索获取今日最新新闻并总结要点，列出具体的新闻事件"},
+			}
 
-		// Use tool executor for cleaner code
-		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
+			executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
 
-		// Get platform-specific prompt
-		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
+			platformPrompt := cfg.GetPlatformPrompt(c.Platform())
 
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
-		if err != nil {
-			logger.Error("News generation error", "error", err)
-			_ = c.Edit(sentMsg, "获取新闻时出错: "+err.Error())
-			return nil
-		}
+			finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 10, platformPrompt)
+			if err != nil {
+				logger.Error("News generation error", "error", err)
+				_ = c.Edit(sentMsg, "获取新闻时出错: "+err.Error())
+				return
+			}
 
-		if err := c.Edit(sentMsg, finalContent); err != nil {
-			logger.Error("Failed to edit message", "error", err)
-			return c.Reply(finalContent)
-		}
+			if err := c.Edit(sentMsg, finalContent); err != nil {
+				logger.Error("Failed to edit message", "error", err)
+				_ = c.Reply(finalContent)
+			}
+		}()
+
 		return nil
 	})
 
@@ -178,53 +235,56 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		}
 		query := strings.TrimSpace(parts[1])
 
-		storageKey := c.Platform() + ":" + user.ID
-		aiCfg := cfg.AI
-		if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
-			aiCfg = *userOverride
-		}
+		// Handle request asynchronously
+		go func() {
+			storageKey := c.Platform() + ":" + user.ID
+			aiCfg := cfg.AI
+			if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
+				aiCfg = *userOverride
+			}
 
-		// 获取女朋友定制提示词
-		systemPrompt := `你是一个智能搜索助手。
+			// 获取女朋友定制提示词
+			systemPrompt := `你是一个智能搜索助手。
 你必须先使用搜索工具来获取最新信息，然后根据搜索结果用简洁清晰的中文回答用户的问题。
 请注意：
 1. 首先调用搜索工具获取相关信息
 2. 获取到搜索结果后，对结果进行分析和总结
 3. 用简洁、有条理的中文回复用户
 4. 如果搜索结果不相关，请说明并尝试用其他关键词重新搜索`
-		if name, gfPrompt, ok := cfg.GetGirlfriendPrompt(storageKey); ok {
-			logger.Debug("Using girlfriend prompt for search", "name", name)
-			systemPrompt = gfPrompt + "\n\n你需要使用搜索工具获取最新信息来回答问题，获取到结果后用温暖的语气总结回复。"
-		}
+			if name, gfPrompt, ok := cfg.GetGirlfriendPrompt(storageKey); ok {
+				logger.Debug("Using girlfriend prompt for search", "name", name)
+				systemPrompt = gfPrompt + "\n\n你需要使用搜索工具获取最新信息来回答问题，获取到结果后用温暖的语气总结回复。"
+			}
 
-		sentMsg, err := c.Send("🔍 正在搜索...")
-		if err != nil {
-			return c.Reply("发送消息失败: " + err.Error())
-		}
+			sentMsg, err := c.Send("🔍 正在搜索...")
+			if err != nil {
+				logger.Error("Failed to send message", "error", err)
+				return
+			}
 
-		messages := []ChatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: query},
-		}
+			messages := []ChatMessage{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: query},
+			}
 
-		// Use tool executor
-		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
+			executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
 
-		// Get platform-specific prompt
-		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
+			platformPrompt := cfg.GetPlatformPrompt(c.Platform())
 
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
-		if err != nil {
-			logger.Error("Search error", "error", err)
-			_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
-			return nil
-		}
+			finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 10, platformPrompt)
+			if err != nil {
+				logger.Error("Search error", "error", err)
+				_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
+				return
+			}
 
-		if err := c.Edit(sentMsg, finalContent); err != nil {
-			logger.Error("Failed to edit message", "error", err)
-			return c.Reply(finalContent)
-		}
+			if err := c.Edit(sentMsg, finalContent); err != nil {
+				logger.Error("Failed to edit message", "error", err)
+				_ = c.Reply(finalContent)
+			}
+		}()
+
 		return nil
 	})
 
@@ -239,46 +299,22 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		}
 
 		storageKey := c.Platform() + ":" + user.ID
+
+		// 获取女朋友定制提示词
 		aiCfg := cfg.AI
 		if userOverride := s.GetUserAIConfig(storageKey); userOverride != nil {
 			aiCfg = *userOverride
 		}
 
-		// 获取女朋友定制提示词
 		systemPrompt := aiCfg.DefaultPrompt
 		if name, gfPrompt, ok := cfg.GetGirlfriendPrompt(storageKey); ok {
 			logger.Debug("Using girlfriend prompt", "name", name, "user_id", user.ID)
 			systemPrompt = gfPrompt
 		}
 
-		sentMsg, err := c.Send("AI 正在思考... ⏳")
-		if err != nil {
-			return c.Reply("发送消息失败: " + err.Error())
-		}
+		// Handle request asynchronously
+		go p.handleRequest(c, cfg, s, logger, systemPrompt, c.Text())
 
-		messages := []ChatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: c.Text()},
-		}
-
-		// Use tool executor
-		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-
-		// Get platform-specific prompt
-		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
-
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
-		if err != nil {
-			logger.Error("AI generation error", "user_id", user.ID, "error", err)
-			_ = c.Edit(sentMsg, "生成回复时出错: "+err.Error())
-			return nil
-		}
-
-		if err := c.Edit(sentMsg, finalContent); err != nil {
-			logger.Error("Failed to edit message", "error", err)
-			return c.Reply(finalContent)
-		}
 		return nil
 	})
 
@@ -320,7 +356,7 @@ func (p *AIPlugin) executePush(ctx *plugins.Context) {
 	defer cancel()
 
 	// No platform prompt for scheduled push
-	content, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, "")
+	content, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 10, "")
 	if err != nil {
 		ctx.Logger.Error("Push generation error", "error", err)
 		return
