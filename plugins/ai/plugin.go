@@ -146,7 +146,10 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		// Get platform-specific prompt
+		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
+
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
 		if err != nil {
 			logger.Error("News generation error", "error", err)
 			_ = c.Edit(sentMsg, "获取新闻时出错: "+err.Error())
@@ -208,7 +211,10 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		// Get platform-specific prompt
+		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
+
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
 		if err != nil {
 			logger.Error("Search error", "error", err)
 			_ = c.Edit(sentMsg, "搜索时出错: "+err.Error())
@@ -259,7 +265,10 @@ func (p *AIPlugin) Init(ctx *plugins.Context) error {
 		executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+		// Get platform-specific prompt
+		platformPrompt := cfg.GetPlatformPrompt(c.Platform())
+
+		finalContent, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, platformPrompt)
 		if err != nil {
 			logger.Error("AI generation error", "user_id", user.ID, "error", err)
 			_ = c.Edit(sentMsg, "生成回复时出错: "+err.Error())
@@ -310,7 +319,8 @@ func (p *AIPlugin) executePush(ctx *plugins.Context) {
 	executeCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	content, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5)
+	// No platform prompt for scheduled push
+	content, err := p.toolExecutor.ExecuteWithTools(executeCtx, aiCfg, messages, 5, "")
 	if err != nil {
 		ctx.Logger.Error("Push generation error", "error", err)
 		return

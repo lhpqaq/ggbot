@@ -20,6 +20,11 @@ ai:
   model: "gpt-4o"
   default_prompt: "你是一个得力的助手。"
 
+# 平台专属提示词（只针对最终回复，不影响工具调用过程）
+platform_prompts:
+  qq: "不要在回复中包含任何 URL 链接。如果需要引用网址，请用文字描述代替。"
+  telegram: ""  # Telegram 无特殊限制
+
 # MCP 服务器配置
 mcpServers:
   # HTTP/SSE 类型示例

@@ -27,6 +27,9 @@ type Config struct {
 	// Push Configuration
 	Push PushConfig `yaml:"push"`
 
+	// Platform specific prompts
+	PlatformPrompts map[string]string `yaml:"platform_prompts"`
+
 	// 女朋友定制配置
 	Girlfriend map[string]GirlfriendConfig `yaml:"girlfriend"`
 }
@@ -140,4 +143,17 @@ func (c *Config) GetGirlfriendPrompt(storageKey string) (string, string, bool) {
 		return gf.Name, gf.Prompt, true
 	}
 	return "", "", false
+}
+
+// GetPlatformPrompt 获取平台专属的提示词（用于最终回复）
+// platform: "telegram", "qq" 等
+func (c *Config) GetPlatformPrompt(platform string) string {
+	if c.PlatformPrompts == nil {
+		return ""
+	}
+	platformLower := strings.ToLower(platform)
+	if prompt, ok := c.PlatformPrompts[platformLower]; ok {
+		return prompt
+	}
+	return ""
 }

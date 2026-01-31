@@ -25,11 +25,13 @@ func NewToolExecutor(manager *MCPManager, logger *slog.Logger) *ToolExecutor {
 
 // ExecuteWithTools executes an AI conversation with tool support
 // Returns the final response content or an error
+// platformPrompt is applied only to the final response (not during tool calls)
 func (e *ToolExecutor) ExecuteWithTools(
 	ctx context.Context,
 	aiCfg config.AIConfig,
 	initialMessages []ChatMessage,
 	maxIterations int,
+	platformPrompt string,
 ) (string, error) {
 	if maxIterations <= 0 {
 		maxIterations = 5
@@ -53,8 +55,28 @@ func (e *ToolExecutor) ExecuteWithTools(
 
 		// Check for tool calls
 		if len(respMsg.ToolCalls) == 0 {
-			// Final response - no more tool calls
-			return respMsg.Content, nil
+			// Final response - apply platform-specific prompt if provided
+			finalContent := respMsg.Content
+
+			if platformPrompt != "" && finalContent != "" {
+				e.logger.Debug("Applying platform prompt for final response")
+
+				// Create a new message with platform-specific instructions
+				finalMessages := []ChatMessage{
+					{Role: "user", Content: fmt.Sprintf("%s\n\n请按照以下要求重新组织你的回复：%s", finalContent, platformPrompt)},
+				}
+
+				// Generate final polished response
+				finalResp, err := Generate(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model, finalMessages, nil)
+				if err != nil {
+					e.logger.Warn("Failed to apply platform prompt, using original response", "error", err)
+					return finalContent, nil
+				}
+
+				return finalResp.Content, nil
+			}
+
+			return finalContent, nil
 		}
 
 		// Execute tool calls
